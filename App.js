@@ -90,7 +90,7 @@ export default function App() {
       qs = shuffle([...c, ...v, ...n]);
     } else if (mode === 'weak') {
       getWrongIds().then(ids => {
-        const wqs = shuffle(Q.filter(q => ids.includes(q.id))).slice(0, 20);
+        const wqs = ids.slice(0, 20).map(id => Q.find(q => q.id === id));
         setQuizState({ mode, qs: wqs, idx: 0, score: 0, valScore: 0, answers: [], chosen: null, timerSecs: mode === 'exam' ? 2700 : null });
         setScreen(SCREENS.QUIZ);
       });
