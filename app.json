@@ -31,7 +31,10 @@
             "gradleVersion": "8.13"
           }
         }
-      ]
+      ],
+      "expo-asset",
+      "expo-font",
+      "expo-sqlite"
     ]
   }
 }

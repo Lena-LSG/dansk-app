@@ -1,158 +1,223 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { supabase } from './supabase';
+import { Q, CAT_EN } from './questions';
 
+// ── LOCAL KEYS (prefs only — stay on device) ──────────────────────────────────
 const KEYS = {
-  PROGRESS: 'dk_progress',
-  HISTORY:  'dk_history',
-  STREAK:   'dk_streak',
-  LAST_STUDY: 'dk_lastStudy',
-  DARK:     'dk_dark',
-  LANG:     'dk_lang',
+  DARK:      'dk_dark',
+  LANG:      'dk_lang',
 };
 
-// ── SM-2 CARD SCHEMA ──────────────────────────────────────────────────────────
-// Each card in progress:
-// {
-//   n:        number   — repetition count (SM-2 n)
-//   ef:       number   — easiness factor, starts at 2.5
-//   interval: number   — days until next review
-//   due:      number   — unix ms timestamp of next due date
-//   wrong:    number   — total wrong answers (kept for compat)
-//   seen:     number   — total answers
-//   last:     number   — timestamp of last answer
-// }
-
+// ── SM-2 ──────────────────────────────────────────────────────────────────────
 const DEFAULT_EF = 2.5;
-const MIN_EF = 1.3;
+const MIN_EF     = 1.3;
 
-// SM-2 grade: 5 = perfect, 4 = correct hesitation, 3 = correct with difficulty,
-// 2 = incorrect easy recall, 1 = incorrect, 0 = blackout
-// We map boolean ok → grade internally.
-// Perfect answer on first try → 5, ok after wrong attempts → 3, wrong → 1
 const gradeFromOk = (ok) => ok ? 5 : 1;
 
 function sm2(card, grade) {
   let { n, ef, interval } = card;
 
-  // Update EF
   ef = Math.max(MIN_EF, ef + (0.1 - (5 - grade) * (0.08 + (5 - grade) * 0.02)));
 
   if (grade < 3) {
-    // Failed: reset repetitions but keep EF
     n = 0;
     interval = 1;
   } else {
-    // Passed
     if (n === 0)      interval = 1;
     else if (n === 1) interval = 6;
     else              interval = Math.round(interval * ef);
     n += 1;
   }
 
-  const due = Date.now() + interval * 24 * 60 * 60 * 1000;
+  const due = new Date(Date.now() + interval * 24 * 60 * 60 * 1000).toISOString();
   return { n, ef, interval, due };
 }
 
+// ── AUTH HELPER ───────────────────────────────────────────────────────────────
+// Returns current user ID, signing in anonymously if needed.
+// All progress is tied to this ID — upgrades to real account preserve data.
+async function getUserId() {
+  const { data: { session } } = await supabase.auth.getSession();
+  if (session?.user) return session.user.id;
+
+  // No session — sign in anonymously
+  const { data, error } = await supabase.auth.signInAnonymously();
+  if (error) throw error;
+  return data.user.id;
+}
+
 // ── PROGRESS ──────────────────────────────────────────────────────────────────
+// Returns progress as { [questionId]: card } — same shape as before
 export const getProgress = async () => {
   try {
-    const v = await AsyncStorage.getItem(KEYS.PROGRESS);
-    return v ? JSON.parse(v) : {};
+    const userId = await getUserId();
+    const { data, error } = await supabase
+      .from('progress')
+      .select('question_id, n, ef, interval, due, wrong, seen, last_seen')
+      .eq('user_id', userId);
+
+    if (error) throw error;
+
+    return Object.fromEntries(
+      (data || []).map(row => [
+        Number(row.question_id),
+        {
+          n:        row.n,
+          ef:       row.ef,
+          interval: row.interval,
+          due:      new Date(row.due).getTime(),
+          wrong:    row.wrong,
+          seen:     row.seen,
+          last:     row.last_seen ? new Date(row.last_seen).getTime() : null,
+        }
+      ])
+    );
   } catch { return {}; }
 };
 
-export const saveProgress = async (p) => {
-  try { await AsyncStorage.setItem(KEYS.PROGRESS, JSON.stringify(p)); } catch {}
-};
-
 export const markAnswer = async (id, ok) => {
-  const p = await getProgress();
-  const existing = p[id] || { n: 0, ef: DEFAULT_EF, interval: 0, due: 0, wrong: 0, seen: 0 };
+  try {
+    const userId = await getUserId();
 
-  const grade = gradeFromOk(ok);
-  const { n, ef, interval, due } = sm2(existing, grade);
+    // Fetch existing card
+    const { data: existing } = await supabase
+      .from('progress')
+      .select('*')
+      .eq('user_id', userId)
+      .eq('question_id', String(id))
+      .single();
 
-  p[id] = {
-    ...existing,
-    n,
-    ef,
-    interval,
-    due,
-    wrong: existing.wrong + (ok ? 0 : 1),
-    seen:  existing.seen + 1,
-    last:  Date.now(),
-  };
+    const card = existing || { n: 0, ef: DEFAULT_EF, interval: 0, due: new Date().toISOString(), wrong: 0, seen: 0 };
+    const grade = gradeFromOk(ok);
+    const { n, ef, interval, due } = sm2(card, grade);
 
-  await saveProgress(p);
+    await supabase.from('progress').upsert({
+      user_id:     userId,
+      question_id: String(id),
+      n,
+      ef,
+      interval,
+      due,
+      wrong:     (card.wrong || 0) + (ok ? 0 : 1),
+      seen:      (card.seen  || 0) + 1,
+      last_seen: new Date().toISOString(),
+    }, { onConflict: 'user_id,question_id' });
+  } catch (e) {
+    console.error('markAnswer failed:', e);
+  }
 };
-
-// ── WEAK SPOTS: SM-2 PRIORITY ─────────────────────────────────────────────────
-// Returns question IDs sorted by priority descending.
-// Priority = how overdue the card is, scaled by error rate.
-// Cards never seen score 0 (excluded — they belong in normal practice).
-// Cards due in the future score > 0 if they have wrong answers (still worth reviewing
-// if you've never got them right consistently).
 
 export const getWrongIds = async () => {
-  const p = await getProgress();
-  const now = Date.now();
+  try {
+    const userId = await getUserId();
+    const { data, error } = await supabase
+      .from('progress')
+      .select('question_id, n, ef, interval, due, wrong, seen')
+      .eq('user_id', userId)
+      .gt('wrong', 0);
 
-  const scored = Object.entries(p)
-    .filter(([, card]) => card.wrong > 0)
-    .map(([id, card]) => {
-      // How overdue in days (negative = not yet due)
-      const overdueDays = (now - (card.due || 0)) / (24 * 60 * 60 * 1000);
-      // Error rate
-      const errorRate = card.seen > 0 ? card.wrong / card.seen : 0;
-      // Priority: overdue cards weighted by error rate
-      // Cards not yet due still get a small positive score if errorRate is high
-      const priority = overdueDays * errorRate + errorRate;
-      return { id: Number(id), priority };
-    })
-    .sort((a, b) => b.priority - a.priority)
-    .map(({ id }) => id);
+    if (error) throw error;
 
-  return scored;
+    const now = Date.now();
+    return (data || [])
+      .map(row => {
+        const overdueDays = (now - new Date(row.due).getTime()) / (24 * 60 * 60 * 1000);
+        const errorRate   = row.seen > 0 ? row.wrong / row.seen : 0;
+        const priority    = overdueDays * errorRate + errorRate;
+        return { id: Number(row.question_id), priority };
+      })
+      .sort((a, b) => b.priority - a.priority)
+      .map(({ id }) => id);
+  } catch { return []; }
 };
 
 // ── HISTORY ───────────────────────────────────────────────────────────────────
+// Stored in a separate Supabase table. Add to schema if needed:
+// create table history (
+//   id uuid default gen_random_uuid() primary key,
+//   user_id uuid references auth.users(id) on delete cascade,
+//   entry jsonb not null,
+//   created_at timestamptz default now()
+// );
+// alter table history enable row level security;
+// create policy "history owner only" on history for all using (auth.uid() = user_id);
+// GRANT SELECT, INSERT, DELETE ON public.history TO service_role;
+
 export const getHistory = async () => {
   try {
-    const v = await AsyncStorage.getItem(KEYS.HISTORY);
-    return v ? JSON.parse(v) : [];
+    const userId = await getUserId();
+    const { data, error } = await supabase
+      .from('history')
+      .select('entry, created_at')
+      .eq('user_id', userId)
+      .order('created_at', { ascending: false })
+      .limit(50);
+
+    if (error) throw error;
+    return (data || []).map(r => r.entry);
   } catch { return []; }
 };
 
 export const addHistory = async (entry) => {
-  const h = await getHistory();
-  h.unshift(entry);
-  await AsyncStorage.setItem(KEYS.HISTORY, JSON.stringify(h.slice(0, 50)));
+  try {
+    const userId = await getUserId();
+    await supabase.from('history').insert({ user_id: userId, entry });
+  } catch (e) {
+    console.error('addHistory failed:', e);
+  }
 };
 
 export const clearHistory = async () => {
-  await AsyncStorage.removeItem(KEYS.HISTORY);
+  try {
+    const userId = await getUserId();
+    await supabase.from('history').delete().eq('user_id', userId);
+  } catch (e) {
+    console.error('clearHistory failed:', e);
+  }
 };
 
 // ── STREAK ────────────────────────────────────────────────────────────────────
+// Stored in a streak table. Add to schema if needed:
+// create table streaks (
+//   user_id uuid primary key references auth.users(id) on delete cascade,
+//   streak int default 0,
+//   last_study date
+// );
+// alter table streaks enable row level security;
+// create policy "streaks owner only" on streaks for all using (auth.uid() = user_id);
+// GRANT SELECT, INSERT, UPDATE ON public.streaks TO service_role;
+
 export const checkStreak = async () => {
   try {
-    const today     = new Date().toDateString();
-    const last      = await AsyncStorage.getItem(KEYS.LAST_STUDY) || '';
-    const streak    = parseInt(await AsyncStorage.getItem(KEYS.STREAK) || '0');
-    const yesterday = new Date(Date.now() - 86400000).toDateString();
-    const newStreak = last === today ? streak : last === yesterday ? streak + 1 : 1;
-    if (last !== today) {
-      await AsyncStorage.setItem(KEYS.STREAK,     String(newStreak));
-      await AsyncStorage.setItem(KEYS.LAST_STUDY, today);
-    }
+    const userId  = await getUserId();
+    const today   = new Date().toISOString().slice(0, 10);
+    const yesterday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);
+
+    const { data } = await supabase
+      .from('streaks')
+      .select('streak, last_study')
+      .eq('user_id', userId)
+      .single();
+
+    const last   = data?.last_study || '';
+    const streak = data?.streak     || 0;
+
+    if (last === today) return streak;
+
+    const newStreak = last === yesterday ? streak + 1 : 1;
+
+    await supabase.from('streaks').upsert({
+      user_id:    userId,
+      streak:     newStreak,
+      last_study: today,
+    }, { onConflict: 'user_id' });
+
     return newStreak;
   } catch { return 0; }
 };
 
 // ── MASTERY ───────────────────────────────────────────────────────────────────
-// Mastery now reflects SM-2 health: % of seen cards with EF >= 2.0 and interval >= 7
-// i.e. cards you've genuinely learned, not just seen once.
 export const getMastery = async () => {
-  const { Q, CAT_EN } = require('./questions');
   const p = await getProgress();
   const result = {};
   Object.keys(CAT_EN).forEach(cat => {
@@ -166,15 +231,13 @@ export const getMastery = async () => {
       total:  catQs.length,
       seen:   seen.length,
       mature: mature.length,
-      // pct represents "mature" cards out of total, so it doesn't inflate
-      // just from seeing a card once
-      pct: catQs.length > 0 ? Math.round((mature.length / catQs.length) * 100) : 0,
+      pct:    catQs.length > 0 ? Math.round((mature.length / catQs.length) * 100) : 0,
     };
   });
   return result;
 };
 
-// ── PREFS ─────────────────────────────────────────────────────────────────────
+// ── PREFS (local only) ────────────────────────────────────────────────────────
 export const getPrefs = async () => {
   try {
     const dark = await AsyncStorage.getItem(KEYS.DARK);
