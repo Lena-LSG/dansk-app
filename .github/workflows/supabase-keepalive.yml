@@ -1,0 +1,30 @@
+name: Supabase Keepalive
+
+# Supabase free-tier projects auto-pause after ~7 days with no API activity.
+# This pings a real table through PostgREST every few days so the project
+# never goes idle long enough to be paused.
+
+on:
+  schedule:
+    - cron: '0 6 */3 * *' # every 3 days at 06:00 UTC
+  workflow_dispatch: {} # allow manual runs from the Actions tab
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping Supabase REST endpoint
+        run: |
+          status=$(curl -s -o /tmp/body.txt -w "%{http_code}" \
+            "${SUPABASE_URL}/rest/v1/streaks?select=user_id&limit=1" \
+            -H "apikey: ${SUPABASE_ANON_KEY}" \
+            -H "Authorization: Bearer ${SUPABASE_ANON_KEY}")
+          echo "HTTP status: $status"
+          cat /tmp/body.txt
+          if [ "$status" -ge 400 ]; then
+            echo "::error::Supabase ping failed with status $status"
+            exit 1
+          fi
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
