@@ -49,6 +49,7 @@ export default function App() {
       const p = await getPrefs();
       setDarkMode(p.dark);
       setLang(p.lang);
+      setSelCat(p.lang === 'en' ? 'All' : 'Alle');
     })();
   }, []);
 
