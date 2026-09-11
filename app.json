@@ -6,21 +6,13 @@
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",
-    "newArchEnabled": true,
-    "splash": {
-      "image": "./assets/splash.png",
-      "resizeMode": "contain",
-      "backgroundColor": "#C8102E"
-    },
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#C8102E"
       },
       "package": "eu.lenagibson.dansk",
-      "versionCode": 1,
-      "minSdkVersion": 24,
-      "targetSdkVersion": 35
+      "versionCode": 1
     },
     "plugins": [
       [
@@ -28,8 +20,18 @@
         {
           "android": {
             "kotlinVersion": "2.0.21",
-            "gradleVersion": "8.13"
+            "gradleVersion": "8.13",
+            "minSdkVersion": 24,
+            "targetSdkVersion": 35
           }
+        }
+      ],
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/splash.png",
+          "resizeMode": "contain",
+          "backgroundColor": "#C8102E"
         }
       ],
       "expo-asset",
