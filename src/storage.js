@@ -1,10 +1,18 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { Q, CAT_EN } from './questions';
+import { CAT_EN } from './questions';
 import {
   getLocalProgress, writeLocalProgress,
   getLocalHistory, addLocalHistory, clearLocalHistory,
   getLocalStreak, setLocalStreak,
+  getLocalQuestions, syncQuestions,
 } from './db';
+
+export {
+  getAuthState, onAuthChange, signUpEmail, signInEmail, signOutUser,
+} from './db';
+
+export const getQuestions = () => getLocalQuestions();
+export const refreshQuestions = () => syncQuestions();
 
 // ── LOCAL KEYS (prefs only — stay on device) ──────────────────────────────────
 const KEYS = {
@@ -113,7 +121,7 @@ export const checkStreak = async () => {
 
 // ── MASTERY ───────────────────────────────────────────────────────────────────
 export const getMastery = async () => {
-  const p = await getProgress();
+  const [p, Q] = await Promise.all([getProgress(), getQuestions()]);
   const result = {};
   Object.keys(CAT_EN).forEach(cat => {
     const catQs  = Q.filter(q => q.cat === cat);

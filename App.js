@@ -1,15 +1,16 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
-  View, Text, TouchableOpacity, ScrollView, StyleSheet, Dimensions,
-  StatusBar, Animated, Alert, Share, useColorScheme, Platform
+  View, Text, TextInput, TouchableOpacity, ScrollView, StyleSheet, Dimensions,
+  StatusBar, Animated, Alert, Share, useColorScheme, Platform, ActivityIndicator
 } from 'react-native';
 import { SafeAreaView, SafeAreaProvider } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as Haptics from 'expo-haptics';
-import { Q, COLORS, CAT_EN, CAT_DA, TYPE_LABELS, shuffle } from './src/questions';
+import { COLORS, CAT_EN, CAT_DA, TYPE_LABELS, shuffle } from './src/questions';
 import {
   markAnswer, getWrongIds, addHistory, getHistory, clearHistory,
-  checkStreak, getMastery, getPrefs, savePrefs
+  checkStreak, getMastery, getPrefs, savePrefs, getQuestions,
+  getAuthState, onAuthChange, signUpEmail, signInEmail, signOutUser,
 } from './src/storage';
 
 const { width: SW, height: SH } = Dimensions.get('window');
@@ -27,7 +28,7 @@ const dark = {
 };
 
 // ── SCREENS ──────────────────────────────────────────────────────────────────
-const SCREENS = { HOME: 'HOME', QUIZ: 'QUIZ', RESULTS: 'RESULTS', FLASHCARDS: 'FLASHCARDS', HISTORY: 'HISTORY' };
+const SCREENS = { HOME: 'HOME', QUIZ: 'QUIZ', RESULTS: 'RESULTS', FLASHCARDS: 'FLASHCARDS', HISTORY: 'HISTORY', ACCOUNT: 'ACCOUNT' };
 
 export default function App() {
   const systemScheme = useColorScheme();
@@ -40,6 +41,9 @@ export default function App() {
   const [results, setResults] = useState(null);
   const [flashState, setFlashState] = useState(null);
   const [historyData, setHistoryData] = useState([]);
+  const [Q, setQ] = useState([]);
+  const [questionsReady, setQuestionsReady] = useState(false);
+  const [auth, setAuth] = useState({ user: null, isAnonymous: true });
   const T = darkMode ? dark : light;
   const da = lang === 'da';
 
@@ -50,6 +54,15 @@ export default function App() {
       setDarkMode(p.dark);
       setLang(p.lang);
       setSelCat(p.lang === 'en' ? 'All' : 'Alle');
+    })();
+  }, []);
+
+  // Load the question bank (local cache first, Supabase in the background)
+  useEffect(() => {
+    (async () => {
+      const qs = await getQuestions();
+      setQ(qs);
+      setQuestionsReady(true);
     })();
   }, []);
 
@@ -71,6 +84,16 @@ export default function App() {
   }, []);
 
   useEffect(() => { if (screen === SCREENS.HOME) loadHomeData(); }, [screen]);
+
+  // Track auth state; refresh home data whenever the signed-in identity changes
+  useEffect(() => {
+    getAuthState().then(setAuth);
+    const unsub = onAuthChange((state) => {
+      setAuth(state);
+      if (state.event === 'SIGNED_IN' || state.event === 'SIGNED_OUT') loadHomeData();
+    });
+    return unsub;
+  }, [loadHomeData]);
   useEffect(() => { if (screen === SCREENS.HISTORY) getHistory().then(setHistoryData); }, [screen]);
 
   const cmap = () => da ? CAT_DA : CAT_EN;
@@ -111,6 +134,18 @@ export default function App() {
   };
 
   // ── RENDER ────────────────────────────────────────────────────────────────
+  if (!questionsReady) {
+    return (
+      <SafeAreaProvider>
+        <StatusBar barStyle="light-content" backgroundColor="#C8102E" />
+        <View style={[styles.root, styles.loadingRoot, { backgroundColor: T.bg }]}>
+          <ActivityIndicator size="large" color="#C8102E" />
+          <Text style={[styles.loadingTxt, { color: T.sub }]}>{da ? 'Indlæser…' : 'Loading…'}</Text>
+        </View>
+      </SafeAreaProvider>
+    );
+  }
+
   return (
     <SafeAreaProvider>
       <StatusBar barStyle={darkMode ? 'light-content' : 'light-content'} backgroundColor="#C8102E" />
@@ -118,8 +153,13 @@ export default function App() {
         {screen === SCREENS.HOME && (
           <HomeScreen T={T} da={da} lang={lang} selCat={selCat} setSelCat={setSelCat}
             homeData={homeData} toggleDark={toggleDark} toggleLang={toggleLang}
-            darkMode={darkMode} startQuiz={startQuiz} startFlash={startFlash}
-            goHistory={() => setScreen(SCREENS.HISTORY)} filtered={filtered} cmap={cmap} />
+            darkMode={darkMode} startQuiz={startQuiz} startFlash={startFlash} qCount={Q.length}
+            goHistory={() => setScreen(SCREENS.HISTORY)} goAccount={() => setScreen(SCREENS.ACCOUNT)}
+            auth={auth} filtered={filtered} cmap={cmap} />
+        )}
+        {screen === SCREENS.ACCOUNT && (
+          <AccountScreen T={T} da={da} auth={auth} goHome={goHome}
+            onSignUp={signUpEmail} onSignIn={signInEmail} onSignOut={signOutUser} />
         )}
         {screen === SCREENS.QUIZ && quizState && (
           <QuizScreen T={T} da={da} lang={lang} state={quizState} setState={setQuizState}
@@ -143,7 +183,7 @@ export default function App() {
 }
 
 // ── HOME SCREEN ───────────────────────────────────────────────────────────────
-function HomeScreen({ T, da, lang, selCat, setSelCat, homeData, toggleDark, toggleLang, darkMode, startQuiz, startFlash, goHistory, filtered, cmap }) {
+function HomeScreen({ T, da, lang, selCat, setSelCat, homeData, toggleDark, toggleLang, darkMode, startQuiz, startFlash, qCount, goHistory, goAccount, auth, filtered, cmap }) {
   const { streak, mastery, weakCount } = homeData;
   const cats = da ? ['Alle', 'Historie', 'Regering', 'Geografi', 'Kultur', 'Rettigheder', 'Værdier', 'Aktuelle Emner']
                   : ['All', 'History', 'Government', 'Geography', 'Culture', 'Rights', 'Values', 'Current Affairs'];
@@ -163,6 +203,9 @@ function HomeScreen({ T, da, lang, selCat, setSelCat, homeData, toggleDark, togg
               </View>
             </View>
             <View style={{ flexDirection: 'row', gap: 8 }}>
+              <TouchableOpacity style={styles.tbtnHdr} onPress={goAccount}>
+                <Text style={styles.tbtnTxt}>{auth.isAnonymous ? '👤' : '✓ ' + (da ? 'Konto' : 'Account')}</Text>
+              </TouchableOpacity>
               <TouchableOpacity style={styles.tbtnHdr} onPress={toggleLang}>
                 <Text style={styles.tbtnTxt}>{lang === 'en' ? '🇩🇰 DA' : '🇬🇧 EN'}</Text>
               </TouchableOpacity>
@@ -253,7 +296,7 @@ function HomeScreen({ T, da, lang, selCat, setSelCat, homeData, toggleDark, togg
             ))}
           </View>
           <View style={styles.statsRow}>
-            {[{ n: Q.length, l: da ? 'Spørgsmål\ni bank' : 'Questions\nin bank' }, { n: '80%', l: da ? 'Beståelsesgrænse\n(36/45)' : 'Pass mark\n(36/45)' }, { n: '5', l: da ? 'Værdis-\npørgsmål' : 'Values\nquestions' }].map((s, i) => (
+            {[{ n: qCount, l: da ? 'Spørgsmål\ni bank' : 'Questions\nin bank' }, { n: '80%', l: da ? 'Beståelsesgrænse\n(36/45)' : 'Pass mark\n(36/45)' }, { n: '5', l: da ? 'Værdis-\npørgsmål' : 'Values\nquestions' }].map((s, i) => (
               <View key={i} style={[styles.statCard, { backgroundColor: T.card, shadowColor: T.sh }]}>
                 <Text style={[styles.statN, { color: '#C8102E' }]}>{s.n}</Text>
                 <Text style={[styles.statL, { color: T.sub }]}>{s.l}</Text>
@@ -615,6 +658,111 @@ function HistoryScreen({ T, da, data, goHome, onClear }) {
   );
 }
 
+// ── ACCOUNT SCREEN ────────────────────────────────────────────────────────────
+function AccountScreen({ T, da, auth, goHome, onSignUp, onSignIn, onSignOut }) {
+  const [mode, setMode] = useState('signin'); // 'signin' | 'signup'
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState({ text: '', err: false });
+
+  const submit = async () => {
+    if (!email.trim()) { setMsg({ text: da ? 'Indtast din e-mail.' : 'Enter your email address.', err: true }); return; }
+    if (!password) { setMsg({ text: da ? 'Indtast din adgangskode.' : 'Enter your password.', err: true }); return; }
+    if (mode === 'signup' && password.length < 8) { setMsg({ text: da ? 'Adgangskoden skal være mindst 8 tegn.' : 'Password must be at least 8 characters.', err: true }); return; }
+
+    setBusy(true); setMsg({ text: '', err: false });
+    try {
+      if (mode === 'signup') {
+        await onSignUp(email.trim(), password);
+        setMsg({ text: da ? '✓ Konto oprettet — synkroniserer din fremgang.' : '✓ Account created — syncing your progress.', err: false });
+        setPassword('');
+      } else {
+        await onSignIn(email.trim(), password);
+      }
+    } catch (e) {
+      setMsg({ text: e.message || String(e), err: true });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (!auth.isAnonymous && auth.user) {
+    return (
+      <View style={{ flex: 1 }}>
+        <SafeAreaView edges={['top']} style={{ backgroundColor: T.card }}>
+          <View style={[styles.quizHdr, { backgroundColor: T.card, borderBottomColor: T.bdr }]}>
+            <View style={styles.quizHdrRow}>
+              <TouchableOpacity onPress={goHome}><Text style={{ color: '#C8102E', fontWeight: '700', fontSize: 14 }}>← {da ? 'Hjem' : 'Home'}</Text></TouchableOpacity>
+              <Text style={[styles.histTitle, { color: T.text }]}>{da ? 'Konto' : 'Account'}</Text>
+              <View style={{ width: 50 }} />
+            </View>
+          </View>
+        </SafeAreaView>
+        <View style={{ padding: 18 }}>
+          <Text style={[styles.sectionLbl, { color: T.sub }]}>{da ? 'LOGGET IND SOM' : 'SIGNED IN AS'}</Text>
+          <View style={[styles.infoCard, { backgroundColor: T.card, shadowColor: T.sh }]}>
+            <Text style={[styles.infoTxt, { color: T.text }]}>{auth.user.email}</Text>
+          </View>
+          <Text style={[styles.emptySub, { color: T.sub, marginBottom: 16 }]}>
+            {da ? 'Din fremgang synkroniseres på tværs af enheder.' : 'Your progress syncs across devices.'}
+          </Text>
+          <TouchableOpacity style={styles.btnPrimary} onPress={onSignOut}>
+            <Text style={styles.btnPrimaryTxt}>{da ? 'Log ud' : 'Sign Out'}</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    );
+  }
+
+  return (
+    <View style={{ flex: 1 }}>
+      <SafeAreaView edges={['top']} style={{ backgroundColor: T.card }}>
+        <View style={[styles.quizHdr, { backgroundColor: T.card, borderBottomColor: T.bdr }]}>
+          <View style={styles.quizHdrRow}>
+            <TouchableOpacity onPress={goHome}><Text style={{ color: '#C8102E', fontWeight: '700', fontSize: 14 }}>← {da ? 'Hjem' : 'Home'}</Text></TouchableOpacity>
+            <Text style={[styles.histTitle, { color: T.text }]}>{da ? 'Konto' : 'Account'}</Text>
+            <View style={{ width: 50 }} />
+          </View>
+        </View>
+      </SafeAreaView>
+      <ScrollView contentContainerStyle={{ padding: 18 }}>
+        <Text style={[styles.sectionLbl, { color: T.sub }]}>{mode === 'signup' ? (da ? 'OPRET KONTO' : 'CREATE ACCOUNT') : (da ? 'LOG IND' : 'SIGN IN')}</Text>
+        <Text style={[styles.emptySub, { color: T.sub, textAlign: 'left', marginBottom: 16 }]}>
+          {mode === 'signup'
+            ? (da ? 'Opret en konto for at synkronisere din fremgang på tværs af enheder.' : 'Create an account to sync your progress across devices.')
+            : (da ? 'Log ind for at synkronisere din fremgang på tværs af enheder.' : 'Sign in to sync your progress across devices.')}
+        </Text>
+        <TextInput
+          style={[styles.authInput, { backgroundColor: T.opt, borderColor: T.optBdr, color: T.text }]}
+          placeholder={da ? 'E-mail' : 'Email'} placeholderTextColor={T.sub}
+          autoCapitalize="none" keyboardType="email-address" value={email} onChangeText={setEmail} editable={!busy}
+        />
+        <TextInput
+          style={[styles.authInput, { backgroundColor: T.opt, borderColor: T.optBdr, color: T.text }]}
+          placeholder={da ? 'Adgangskode' : 'Password'} placeholderTextColor={T.sub}
+          secureTextEntry value={password} onChangeText={setPassword} editable={!busy}
+        />
+        {!!msg.text && <Text style={[styles.authMsg, msg.err && styles.authMsgErr]}>{msg.text}</Text>}
+        <TouchableOpacity style={[styles.btnPrimary, busy && { opacity: 0.6 }]} onPress={submit} disabled={busy}>
+          <Text style={styles.btnPrimaryTxt}>
+            {busy ? (mode === 'signup' ? (da ? 'Opretter…' : 'Creating…') : (da ? 'Logger ind…' : 'Signing in…'))
+                  : (mode === 'signup' ? (da ? 'Opret konto' : 'Create Account') : (da ? 'Log ind' : 'Sign In'))}
+          </Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={{ marginTop: 16, alignItems: 'center' }} onPress={() => { setMode(mode === 'signin' ? 'signup' : 'signin'); setMsg({ text: '', err: false }); }}>
+          <Text style={[styles.authToggle, { color: T.sub }]}>
+            {mode === 'signin'
+              ? (da ? "Har du ikke en konto? " : "Don't have an account? ")
+              : (da ? 'Har du allerede en konto? ' : 'Already have an account? ')}
+            <Text style={{ color: '#C8102E', fontWeight: '700' }}>{mode === 'signin' ? (da ? 'Opret en' : 'Create one') : (da ? 'Log ind' : 'Sign in')}</Text>
+          </Text>
+        </TouchableOpacity>
+      </ScrollView>
+    </View>
+  );
+}
+
 // ── HELPERS ───────────────────────────────────────────────────────────────────
 function DanishFlag() {
   return (
@@ -640,6 +788,12 @@ function ModeBtn({ color, icon, title, desc, onPress }) {
 // ── STYLES ────────────────────────────────────────────────────────────────────
 const styles = StyleSheet.create({
   root: { flex: 1 },
+  loadingRoot: { alignItems: 'center', justifyContent: 'center', gap: 12 },
+  loadingTxt: { fontSize: 13, fontWeight: '600' },
+  authInput: { borderWidth: 2, borderRadius: 12, padding: 13, fontSize: 14, marginBottom: 10 },
+  authMsg: { fontSize: 12, marginBottom: 10, color: '#2E7D32', fontWeight: '600' },
+  authMsgErr: { color: '#C8102E' },
+  authToggle: { fontSize: 13 },
   hdr: { paddingHorizontal: 20, paddingBottom: 24 },
   hdrTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 },
   hdrBrand: { flexDirection: 'row', alignItems: 'center', gap: 12 },

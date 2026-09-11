@@ -17,6 +17,7 @@ import * as SQLite from 'expo-sqlite';
 import * as Network from 'expo-network';
 import { AppState } from 'react-native';
 import { supabase } from './supabase';
+import { Q as FALLBACK_Q } from './questions';
 
 const DB_NAME = 'dansk.db';
 
@@ -38,6 +39,8 @@ function getDb() {
   return _dbPromise;
 }
 
+const withTimeout = (p, ms) => Promise.race([p, new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), ms))]);
+
 // ── AUTH ──────────────────────────────────────────────────────────────────────
 export async function getUserId() {
   const { data: { session } } = await supabase.auth.getSession();
@@ -46,6 +49,45 @@ export async function getUserId() {
   const { data, error } = await supabase.auth.signInAnonymously();
   if (error) throw error;
   return data.user.id;
+}
+
+export async function getAuthState() {
+  const { data: { session } } = await supabase.auth.getSession();
+  const user = session?.user || null;
+  return { user, isAnonymous: !user || user.is_anonymous === true };
+}
+
+// Fires on sign-in/sign-up/sign-out/token-refresh. Returns an unsubscribe fn.
+export function onAuthChange(callback) {
+  const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+    const user = session?.user || null;
+    callback({ event, user, isAnonymous: !user || user.is_anonymous === true });
+  });
+  return () => subscription.unsubscribe();
+}
+
+export async function signUpEmail(email, password) {
+  const { data: { session } } = await supabase.auth.getSession();
+  if (session?.user?.is_anonymous) {
+    // Upgrade the existing anonymous identity in place — same UID, so
+    // whatever progress this device already made stays attached.
+    const { data, error } = await supabase.auth.updateUser({ email, password });
+    if (error) throw error;
+    return data.user;
+  }
+  const { data, error } = await supabase.auth.signUp({ email, password });
+  if (error) throw error;
+  return data.user;
+}
+
+export async function signInEmail(email, password) {
+  const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+  if (error) throw error;
+  return data.user;
+}
+
+export async function signOutUser() {
+  await supabase.auth.signOut();
 }
 
 // ── INIT ──────────────────────────────────────────────────────────────────────
@@ -78,6 +120,13 @@ async function createTables(db) {
       next_attempt_at INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS questions (
+      id INTEGER PRIMARY KEY,
+      cat TEXT NOT NULL,
+      type TEXT NOT NULL,
+      en TEXT NOT NULL,
+      da TEXT NOT NULL
+    );
   `);
 }
 
@@ -102,11 +151,11 @@ async function initialHydrate(db) {
   try {
     const userId = await getUserId();
 
-    const [{ data: progressRows }, { data: historyRows }, { data: streakRow }] = await Promise.all([
+    const [{ data: progressRows }, { data: historyRows }, { data: streakRow }] = await withTimeout(Promise.all([
       supabase.from('progress').select('question_id, n, ef, interval, due, wrong, seen, last_seen').eq('user_id', userId),
       supabase.from('history').select('entry, created_at').eq('user_id', userId).order('created_at', { ascending: false }).limit(50),
       supabase.from('streaks').select('streak, last_study').eq('user_id', userId).single(),
-    ]);
+    ]), 15000);
 
     for (const row of progressRows || []) {
       await db.runAsync(
@@ -138,6 +187,83 @@ async function initialHydrate(db) {
   await setMeta(db, 'initial_hydrate_done', '1');
 }
 
+// ── QUESTIONS ─────────────────────────────────────────────────────────────────
+// Same cache-then-revalidate approach as the web app: show what's cached
+// instantly, refetch in the background, replace on success. The bundled
+// FALLBACK_Q only seeds a true cold start (no cache yet) that also has no
+// network — after that, Supabase is the only source of truth.
+function mapRemoteQuestion(r) {
+  return {
+    id: Number(r.id), cat: r.category, type: r.type,
+    en: [r.en_question, r.en_options, r.en_correct, r.en_explanation],
+    da: [r.da_question, r.da_options, r.da_correct, r.da_explanation],
+  };
+}
+
+async function replaceLocalQuestions(db, questions) {
+  await db.execAsync('DELETE FROM questions');
+  for (const q of questions) {
+    await db.runAsync(
+      'INSERT INTO questions (id, cat, type, en, da) VALUES (?, ?, ?, ?, ?)',
+      [q.id, q.cat, q.type, JSON.stringify(q.en), JSON.stringify(q.da)]
+    );
+  }
+}
+
+export async function getLocalQuestions() {
+  const db = await ready();
+  const rows = await db.getAllAsync('SELECT * FROM questions ORDER BY id ASC');
+  return rows.map(r => ({ id: r.id, cat: r.cat, type: r.type, en: JSON.parse(r.en), da: JSON.parse(r.da) }));
+}
+
+export async function syncQuestions() {
+  const db = await getDb();
+  try {
+    const { data, error } = await withTimeout(
+      supabase.from('questions').select('*').order('id', { ascending: true }),
+      15000
+    );
+    if (error || !data || data.length === 0) return false;
+    await replaceLocalQuestions(db, data.map(mapRemoteQuestion));
+    return true;
+  } catch (e) {
+    // Timeout, or offline — caller falls back to whatever's already cached.
+    console.warn('syncQuestions failed, keeping local cache:', e?.message || e);
+    return false;
+  }
+}
+
+async function ensureQuestionsLoaded(db) {
+  const row = await db.getFirstAsync('SELECT COUNT(*) as n FROM questions');
+  if ((row?.n || 0) > 0) {
+    syncQuestions(); // have something to show already — refresh in the background
+    return;
+  }
+  const synced = await syncQuestions(); // cold start — block until we have something
+  if (!synced) {
+    const stillEmpty = ((await db.getFirstAsync('SELECT COUNT(*) as n FROM questions'))?.n || 0) === 0;
+    if (stillEmpty) await replaceLocalQuestions(db, FALLBACK_Q); // offline on very first launch
+  }
+}
+
+// ── IDENTITY SWITCH ───────────────────────────────────────────────────────────
+// Signing in as a different account (or signing out, which starts a fresh
+// anonymous session) means the local cache belongs to the wrong user now.
+let _trackedUserId = null;
+function armIdentityWatcher() {
+  supabase.auth.onAuthStateChange(async (event, session) => {
+    const newId = session?.user?.id || null;
+    if (newId && _trackedUserId !== null && newId !== _trackedUserId) {
+      const db = await getDb();
+      await flushSyncQueue().catch(() => {}); // best-effort: push whatever the old identity owed first
+      await db.execAsync('DELETE FROM progress; DELETE FROM history; DELETE FROM sync_queue;');
+      await setMeta(db, 'initial_hydrate_done', '0');
+      await initialHydrate(db);
+    }
+    _trackedUserId = newId;
+  });
+}
+
 let _listenersArmed = false;
 function armBackgroundFlush() {
   if (_listenersArmed) return;
@@ -159,7 +285,9 @@ export function initDb() {
       const db = await getDb();
       await createTables(db);
       await initialHydrate(db);
+      await ensureQuestionsLoaded(db);
       armBackgroundFlush();
+      armIdentityWatcher();
       flushSyncQueue(); // opportunistic, don't block startup on it
       return db;
     })();
