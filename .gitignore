@@ -11,9 +11,9 @@ android/
 ios/
 
 # Environment and secrets
-src/supabase.js
 *.env
 .env*
+!.env.example
 
 # Build artifacts
 *.jks
@@ -37,3 +37,4 @@ yarn-error.*
 
 # Local
 *.log
+.debug-db.sqlite

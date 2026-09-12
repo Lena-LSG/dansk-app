@@ -28,7 +28,7 @@ const dark = {
 };
 
 // ── SCREENS ──────────────────────────────────────────────────────────────────
-const SCREENS = { HOME: 'HOME', QUIZ: 'QUIZ', RESULTS: 'RESULTS', FLASHCARDS: 'FLASHCARDS', HISTORY: 'HISTORY', ACCOUNT: 'ACCOUNT' };
+const SCREENS = { HOME: 'HOME', QUIZ: 'QUIZ', RESULTS: 'RESULTS', FLASHCARDS: 'FLASHCARDS', HISTORY: 'HISTORY', HISTORY_DETAIL: 'HISTORY_DETAIL', ACCOUNT: 'ACCOUNT' };
 
 export default function App() {
   const systemScheme = useColorScheme();
@@ -41,6 +41,7 @@ export default function App() {
   const [results, setResults] = useState(null);
   const [flashState, setFlashState] = useState(null);
   const [historyData, setHistoryData] = useState([]);
+  const [historyDetail, setHistoryDetail] = useState(null);
   const [Q, setQ] = useState([]);
   const [questionsReady, setQuestionsReady] = useState(false);
   const [auth, setAuth] = useState({ user: null, isAnonymous: true });
@@ -103,6 +104,15 @@ export default function App() {
   };
 
   const goHome = () => { setScreen(SCREENS.HOME); };
+
+  const openHistoryEntry = (entry) => {
+    if (!entry.answers || entry.answers.length === 0) return; // older entries have no per-question detail
+    const answers = entry.answers
+      .map(a => ({ q: Q.find(qq => qq.id === a.id), chosen: a.chosen, ok: a.ok }))
+      .filter(a => a.q); // question may have been removed/changed since
+    setHistoryDetail({ mode: entry.mode, qs: answers.map(a => a.q), answers, score: entry.score, total: entry.total, valScore: entry.val, passed: entry.passed });
+    setScreen(SCREENS.HISTORY_DETAIL);
+  };
 
   // ── START QUIZ ────────────────────────────────────────────────────────────
   const startQuiz = (mode) => {
@@ -175,7 +185,12 @@ export default function App() {
         )}
         {screen === SCREENS.HISTORY && (
           <HistoryScreen T={T} da={da} data={historyData} goHome={goHome}
+            onSelect={openHistoryEntry}
             onClear={async () => { await clearHistory(); setHistoryData([]); }} />
+        )}
+        {screen === SCREENS.HISTORY_DETAIL && historyDetail && (
+          <ResultsScreen T={T} da={da} results={historyDetail} goHome={() => setScreen(SCREENS.HISTORY)}
+            retry={() => startQuiz(historyDetail.mode)} />
         )}
       </View>
     </SafeAreaProvider>
@@ -195,24 +210,27 @@ function HomeScreen({ T, da, lang, selCat, setSelCat, homeData, toggleDark, togg
       <LinearGradient colors={['#C8102E', darkMode ? '#7a0000' : '#a00020']} style={styles.hdr}>
         <SafeAreaView edges={['top']}>
           <View style={styles.hdrTop}>
-            <View style={styles.hdrBrand}>
-              <DanishFlag />
-              <View>
-                <Text style={styles.hdrTitle}>DANSK</Text>
-                <Text style={styles.hdrSub}>{da ? 'INDFØDSRETSPRØVEN' : 'CITIZENSHIP TEST PREP'}</Text>
+            <View style={styles.hdrTitleRow}>
+              <View style={styles.hdrBrand}>
+                <DanishFlag />
+                <Text style={styles.hdrTitle} numberOfLines={1}>DANSK</Text>
+              </View>
+              <View style={styles.hdrUtilGroup}>
+                <TouchableOpacity style={styles.hdrUtilBtn} onPress={goAccount}>
+                  <Text style={styles.tbtnTxt}>{auth.isAnonymous ? '👤' : '✅'}</Text>
+                </TouchableOpacity>
+                <View style={styles.hdrUtilDivider} />
+                <TouchableOpacity style={[styles.hdrUtilBtn, { flexDirection: 'row', alignItems: 'center', gap: 4 }]} onPress={toggleLang}>
+                  <Text style={styles.tbtnTxt}>{lang === 'en' ? '🇬🇧' : '🇩🇰'}</Text>
+                  <Text style={styles.tbtnTxt}>{lang === 'en' ? 'EN' : 'DA'}</Text>
+                </TouchableOpacity>
+                <View style={styles.hdrUtilDivider} />
+                <TouchableOpacity style={styles.hdrUtilBtn} onPress={toggleDark}>
+                  <Text style={styles.tbtnTxt}>{darkMode ? '☀️' : '🌙'}</Text>
+                </TouchableOpacity>
               </View>
             </View>
-            <View style={{ flexDirection: 'row', gap: 8 }}>
-              <TouchableOpacity style={styles.tbtnHdr} onPress={goAccount}>
-                <Text style={styles.tbtnTxt}>{auth.isAnonymous ? '👤' : '✓ ' + (da ? 'Konto' : 'Account')}</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.tbtnHdr} onPress={toggleLang}>
-                <Text style={styles.tbtnTxt}>{lang === 'en' ? '🇩🇰 DA' : '🇬🇧 EN'}</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.tbtnHdr} onPress={toggleDark}>
-                <Text style={styles.tbtnTxt}>{darkMode ? '☀️' : '🌙'}</Text>
-              </TouchableOpacity>
-            </View>
+            <Text style={styles.hdrSub}>{da ? 'INDFØDSRETSPRØVEN' : 'CITIZENSHIP TEST PREP'}</Text>
           </View>
           <Text style={styles.hdrDesc}>
             {da ? 'Mester den viden der kræves til Indfødsretsprøven.' : 'Master the knowledge needed for the Indfødsretsprøven.'}
@@ -277,8 +295,8 @@ function HomeScreen({ T, da, lang, selCat, setSelCat, homeData, toggleDark, togg
         <View style={styles.section}>
           <Text style={[styles.sectionLbl, { color: T.sub }]}>{da ? 'VÆLG TILSTAND' : 'CHOOSE YOUR MODE'}</Text>
           <ModeBtn color="#C8102E" icon="📝" title={da ? 'Øvequiz' : 'Practice Quiz'} desc={da ? '10 tilfældige spørgsmål' : '10 random questions'} onPress={() => startQuiz('practice')} />
-          <ModeBtn color="#0033A0" icon="🏆" title={da ? 'Fuld Prøveeksamen' : 'Full Mock Test'} desc={da ? '45 spørgsmål · rigtig format' : '45 questions · real format'} onPress={() => startQuiz('mock')} />
-          <ModeBtn color="#5B2D8E" icon="⏱️" title={da ? 'Eksamenssimulator' : 'Exam Simulator'} desc={da ? '45 min · ingen hints · rigtige betingelser' : '45 min · no hints · real conditions'} onPress={() => startQuiz('exam')} />
+          <ModeBtn color="#0033A0" icon="🏆" title={da ? 'Fuld Prøveeksamen' : 'Full Mock Test'} desc={da ? '45 spørgsmål · ikke tidsbegrænset · med forklaringer' : '45 questions · untimed · with explanations'} onPress={() => startQuiz('mock')} />
+          <ModeBtn color="#5B2D8E" icon="⏱️" title={da ? 'Eksamenssimulator' : 'Exam Simulator'} desc={da ? '45 min · tidsbegrænset · ingen forklaringer' : '45 min timed · no explanations'} onPress={() => startQuiz('exam')} />
           {weakCount > 0 && <ModeBtn color="#00695C" icon="🎯" title={da ? 'Svage Punkter' : 'Weak Spots'} desc={da ? `${weakCount} spørgsmål du svarede forkert` : `${weakCount} questions you got wrong`} onPress={() => startQuiz('weak')} />}
           <ModeBtn color="#1a1a2e" icon="🃏" title={da ? 'Flashkort' : 'Flashcards'} desc={da ? 'Gennemgå alle emner' : 'Study all topics'} onPress={startFlash} />
           <ModeBtn color="#AD1457" icon="📈" title={da ? 'Historik' : 'History'} desc={da ? 'Tidligere resultater og scores' : 'Past results & scores'} onPress={goHistory} />
@@ -347,7 +365,10 @@ function QuizScreen({ T, da, lang, state, setState, goHome, onFinish }) {
     const passed = (mode === 'mock' || mode === 'exam')
       ? (sc >= Math.ceil(total * 0.8) && vs >= 4)
       : (sc >= Math.ceil(total * 0.7));
-    await addHistory({ mode, score: sc, total, pct: Math.round((sc / total) * 100), val: vs, passed, date: new Date().toLocaleDateString(da ? 'da-DK' : 'en-GB'), ts: Date.now() });
+    // Lean per-question record (id, not the full question) so history stays
+    // small and always reflects the current question content on lookup.
+    const answerIds = ans.map(a => ({ id: a.q.id, chosen: a.chosen, ok: a.ok }));
+    await addHistory({ mode, score: sc, total, pct: Math.round((sc / total) * 100), val: vs, passed, date: new Date().toLocaleDateString(da ? 'da-DK' : 'en-GB'), ts: Date.now(), answers: answerIds });
     onFinish({ mode, qs, answers: ans, score: sc, total, valScore: vs, passed });
   };
 
@@ -488,8 +509,8 @@ function ResultsScreen({ T, da, results, goHome, retry }) {
     <View style={{ flex: 1, backgroundColor: T.bg }}>
       <LinearGradient colors={[bgColor, passed ? '#a00020' : '#0a1a3a']} style={styles.resHdr}>
         <SafeAreaView edges={['top']}>
-          <Text style={styles.resEmoji}>{passed ? '🎉' : '📚'}</Text>
-          <Text style={styles.resTitle}>{passed ? (da ? 'Bestået! 🎉' : 'Passed! 🎉') : (da ? 'Fortsæt øv! 📚' : 'Keep Practicing!')}</Text>
+          <Text style={styles.resEmoji}>{passed ? '🎊' : '📚'}</Text>
+          <Text style={styles.resTitle}>{passed ? (da ? 'Bestået!' : 'Passed!') : (da ? 'Fortsæt øv!' : 'Keep Practicing!')}</Text>
           <Text style={styles.resSub}>{passed ? (da ? 'Du bestod prøven!' : 'You passed the test!') : (da ? 'Bliv ved med at øve!' : 'Keep going, you can do it!')}</Text>
           <View style={styles.scoreBox}>
             <Text style={styles.scoreNum}>{score}/{total}</Text>
@@ -499,7 +520,8 @@ function ResultsScreen({ T, da, results, goHome, retry }) {
             )}
           </View>
           <TouchableOpacity style={styles.shareBtn} onPress={doShare}>
-            <Text style={styles.shareBtnTxt}>📤 {da ? 'Del Resultat' : 'Share Result'}</Text>
+            <Text style={styles.shareBtnTxt}>📤</Text>
+            <Text style={styles.shareBtnTxt}> {da ? 'Del Resultat' : 'Share Result'}</Text>
           </TouchableOpacity>
         </SafeAreaView>
       </LinearGradient>
@@ -557,8 +579,9 @@ function FlashScreen({ T, da, lang, state, setState, goHome, toggleDark, toggleL
             </TouchableOpacity>
             <Text style={[styles.counter, { color: T.sub }]}>{idx + 1}/{qs.length}</Text>
             <View style={{ flexDirection: 'row', gap: 6 }}>
-              <TouchableOpacity style={[styles.tbtnInn, { backgroundColor: T.card, borderColor: T.bdr }]} onPress={toggleLang}>
-                <Text style={[styles.tbtnInnTxt, { color: T.text }]}>{lang === 'en' ? '🇩🇰 DA' : '🇬🇧 EN'}</Text>
+              <TouchableOpacity style={[styles.tbtnInn, { backgroundColor: T.card, borderColor: T.bdr, flexDirection: 'row', alignItems: 'center', gap: 4 }]} onPress={toggleLang}>
+                <Text style={[styles.tbtnInnTxt, { color: T.text }]}>{lang === 'en' ? '🇬🇧' : '🇩🇰'}</Text>
+                <Text style={[styles.tbtnInnTxt, { color: T.text }]}>{lang === 'en' ? 'EN' : 'DA'}</Text>
               </TouchableOpacity>
               <TouchableOpacity style={[styles.tbtnInn, { backgroundColor: T.card, borderColor: T.bdr }]} onPress={toggleDark}>
                 <Text style={[styles.tbtnInnTxt, { color: T.text }]}>{darkMode ? '☀️' : '🌙'}</Text>
@@ -616,7 +639,7 @@ function FlashScreen({ T, da, lang, state, setState, goHome, toggleDark, toggleL
 }
 
 // ── HISTORY SCREEN ────────────────────────────────────────────────────────────
-function HistoryScreen({ T, da, data, goHome, onClear }) {
+function HistoryScreen({ T, da, data, goHome, onSelect, onClear }) {
   const mLabels = { practice: da ? 'Øvequiz' : 'Practice', mock: da ? 'Prøveeksamen' : 'Mock Test', exam: da ? 'Eksamen' : 'Exam', weak: da ? 'Svage Punkter' : 'Weak Spots' };
   return (
     <View style={{ flex: 1 }}>
@@ -640,8 +663,11 @@ function HistoryScreen({ T, da, data, goHome, onClear }) {
           </View>
         ) : data.map((e, i) => {
           const col = e.passed ? '#2E7D32' : '#C8102E';
+          const hasDetail = e.answers && e.answers.length > 0;
           return (
-            <View key={i} style={[styles.histItem, { backgroundColor: T.card, shadowColor: T.sh }]}>
+            <TouchableOpacity key={i} disabled={!hasDetail} activeOpacity={hasDetail ? 0.6 : 1}
+              onPress={() => onSelect(e)}
+              style={[styles.histItem, { backgroundColor: T.card, shadowColor: T.sh }]}>
               <Text style={[styles.histScore, { color: col }]}>{e.score}/{e.total}</Text>
               <View style={{ flex: 1 }}>
                 <Text style={[styles.histMode, { color: T.text }]}>{mLabels[e.mode] || e.mode}</Text>
@@ -650,7 +676,8 @@ function HistoryScreen({ T, da, data, goHome, onClear }) {
               <View style={[styles.histBadge, { backgroundColor: e.passed ? '#E8F5E9' : '#FFEBEE' }]}>
                 <Text style={{ color: col, fontWeight: '700', fontSize: 11 }}>{e.passed ? (da ? 'Bestået' : 'Pass') : (da ? 'Ikke bestået' : 'Fail')}</Text>
               </View>
-            </View>
+              {hasDetail && <Text style={{ color: T.sub, fontSize: 18, marginLeft: 4 }}>›</Text>}
+            </TouchableOpacity>
           );
         })}
       </ScrollView>
@@ -702,8 +729,15 @@ function AccountScreen({ T, da, auth, goHome, onSignUp, onSignIn, onSignOut }) {
         <View style={{ padding: 18 }}>
           <Text style={[styles.sectionLbl, { color: T.sub }]}>{da ? 'LOGGET IND SOM' : 'SIGNED IN AS'}</Text>
           <View style={[styles.infoCard, { backgroundColor: T.card, shadowColor: T.sh }]}>
-            <Text style={[styles.infoTxt, { color: T.text }]}>{auth.user.email}</Text>
+            <Text style={{ fontSize: 13, color: T.text }}>
+              {auth.user.email || auth.user.new_email || (da ? '(ukendt)' : '(unknown)')}
+            </Text>
           </View>
+          {!auth.user.email && auth.user.new_email && (
+            <Text style={[styles.authMsg, { color: '#E8A44A' }]}>
+              {da ? 'Tjek din e-mail for at bekræfte kontoen.' : 'Check your email to confirm this account.'}
+            </Text>
+          )}
           <Text style={[styles.emptySub, { color: T.sub, marginBottom: 16 }]}>
             {da ? 'Din fremgang synkroniseres på tværs af enheder.' : 'Your progress syncs across devices.'}
           </Text>
@@ -795,10 +829,14 @@ const styles = StyleSheet.create({
   authMsgErr: { color: '#C8102E' },
   authToggle: { fontSize: 13 },
   hdr: { paddingHorizontal: 20, paddingBottom: 24 },
-  hdrTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 },
-  hdrBrand: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  hdrTitle: { fontFamily: Platform.OS === 'ios' ? 'Georgia' : 'serif', fontSize: 34, fontWeight: '700', color: '#fff', letterSpacing: 2 },
-  hdrSub: { fontSize: 10, fontWeight: '600', letterSpacing: 3, color: 'rgba(255,255,255,.65)', marginTop: 3 },
+  hdrTop: { marginBottom: 12 },
+  hdrTitleRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  hdrUtilGroup: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(255,255,255,.15)', borderWidth: 1.5, borderColor: 'rgba(255,255,255,.3)', borderRadius: 20, paddingHorizontal: 4, paddingVertical: 4, gap: 2 },
+  hdrUtilBtn: { paddingHorizontal: 9, paddingVertical: 4 },
+  hdrUtilDivider: { width: 1, alignSelf: 'stretch', backgroundColor: 'rgba(255,255,255,.25)', marginVertical: 2 },
+  hdrBrand: { flexDirection: 'row', alignItems: 'center', gap: 10, flexShrink: 1, minWidth: 0 },
+  hdrTitle: { fontFamily: Platform.OS === 'ios' ? 'Georgia' : 'serif', fontSize: 30, fontWeight: '700', color: '#fff', letterSpacing: 2 },
+  hdrSub: { fontSize: 10, fontWeight: '600', letterSpacing: 3, color: 'rgba(255,255,255,.65)', marginTop: 8 },
   hdrDesc: { fontSize: 13, color: 'rgba(255,255,255,.82)', lineHeight: 20 },
   tbtnHdr: { backgroundColor: 'rgba(255,255,255,.15)', borderWidth: 1.5, borderColor: 'rgba(255,255,255,.3)', borderRadius: 20, paddingHorizontal: 11, paddingVertical: 5 },
   tbtnTxt: { color: '#fff', fontSize: 12, fontWeight: '600' },
@@ -856,14 +894,14 @@ const styles = StyleSheet.create({
   nextBtn: { marginTop: 14, backgroundColor: '#C8102E', borderRadius: 10, padding: 13, alignItems: 'center' },
   nextBtnTxt: { color: '#fff', fontWeight: '700', fontSize: 14 },
   resHdr: { padding: 28, paddingBottom: 28, alignItems: 'center' },
-  resEmoji: { fontSize: 52, marginBottom: 8 },
+  resEmoji: { fontSize: 52, marginBottom: 8, textAlign: 'center' },
   resTitle: { fontFamily: Platform.OS === 'ios' ? 'Georgia' : 'serif', fontSize: 28, fontWeight: '700', color: '#fff', textAlign: 'center' },
   resSub: { fontSize: 15, color: 'rgba(255,255,255,.8)', marginTop: 4, marginBottom: 20, textAlign: 'center' },
   scoreBox: { backgroundColor: 'rgba(255,255,255,.15)', borderRadius: 18, padding: 16, paddingHorizontal: 40, alignItems: 'center', marginBottom: 14 },
   scoreNum: { fontFamily: Platform.OS === 'ios' ? 'Georgia' : 'serif', fontSize: 36, fontWeight: '700', color: '#fff' },
   scorePct: { fontSize: 14, color: 'rgba(255,255,255,.75)', marginTop: 2 },
   scoreVal: { fontSize: 12, color: 'rgba(255,255,255,.8)', marginTop: 6, fontWeight: '600' },
-  shareBtn: { backgroundColor: 'rgba(255,255,255,.18)', borderWidth: 2, borderColor: 'rgba(255,255,255,.35)', borderRadius: 12, paddingVertical: 10, paddingHorizontal: 24 },
+  shareBtn: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(255,255,255,.18)', borderWidth: 2, borderColor: 'rgba(255,255,255,.35)', borderRadius: 12, paddingVertical: 10, paddingHorizontal: 24 },
   shareBtnTxt: { color: '#fff', fontWeight: '700', fontSize: 13 },
   reviewItem: { borderRadius: 12, padding: 13, marginBottom: 9, borderLeftWidth: 4, shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.06, shadowRadius: 6, elevation: 2 },
   reviewQ: { fontSize: 13, fontWeight: '600', lineHeight: 20, marginBottom: 7 },

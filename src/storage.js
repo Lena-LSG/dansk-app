@@ -79,7 +79,16 @@ export const getWrongIds = async () => {
     const p = await getLocalProgress();
     const now = Date.now();
     return Object.entries(p)
-      .filter(([, card]) => card.wrong > 0)
+      // wrong > 0 is a lifetime counter and never resets on its own, so this
+      // can't be the only condition or a question answered wrong once but
+      // since mastered would stay flagged forever. Use SM-2's own `due` field
+      // instead of the long-term mastery bar: any question just answered
+      // (right or wrong) gets freshly scheduled for its next review and
+      // shouldn't still show as "weak" a moment later — it should reappear
+      // exactly when SM-2 says it's due again, not require several reps
+      // before ever leaving the list. Long-term mastery (getMastery) is a
+      // separate, stricter concept and is unaffected by this.
+      .filter(([, card]) => card.wrong > 0 && card.due <= now)
       .map(([id, card]) => {
         const overdueDays = (now - card.due) / (24 * 60 * 60 * 1000);
         const errorRate   = card.seen > 0 ? card.wrong / card.seen : 0;
