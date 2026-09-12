@@ -1,8 +1,11 @@
 name: Supabase Keepalive
 
 # Supabase free-tier projects auto-pause after ~7 days with no API activity.
-# This pings a real table through PostgREST every few days so the project
-# never goes idle long enough to be paused.
+# This pings a dedicated, empty, non-sensitive table (public._keepalive)
+# through PostgREST every few days so the project never goes idle long
+# enough to be paused. It intentionally does NOT query streaks/history/etc,
+# so anon never needs read access to any real user data just to keep the
+# project alive.
 
 on:
   schedule:
@@ -16,7 +19,7 @@ jobs:
       - name: Ping Supabase REST endpoint
         run: |
           status=$(curl -s -o /tmp/body.txt -w "%{http_code}" \
-            "${SUPABASE_URL}/rest/v1/streaks?select=user_id&limit=1" \
+            "${SUPABASE_URL}/rest/v1/_keepalive?select=id&limit=1" \
             -H "apikey: ${SUPABASE_ANON_KEY}" \
             -H "Authorization: Bearer ${SUPABASE_ANON_KEY}")
           echo "HTTP status: $status"
