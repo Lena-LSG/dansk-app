@@ -294,6 +294,9 @@ function HomeScreen({ T, da, lang, selCat, setSelCat, homeData, toggleDark, togg
 
         <View style={styles.section}>
           <Text style={[styles.sectionLbl, { color: T.sub }]}>{da ? 'VÆLG TILSTAND' : 'CHOOSE YOUR MODE'}</Text>
+          <Text style={[styles.modeFilterNote, { color: T.sub }]}>
+            {da ? 'Emnefilteret gælder kun for Øvequiz og Flashkort. Prøveeksamen, eksamenssimulator og svage punkter dækker altid alle emner.' : 'The topic filter only applies to Practice Quiz and Flashcards. Mock Test, Exam Simulator and Weak Spots always cover all topics.'}
+          </Text>
           <ModeBtn color="#C8102E" icon="📝" title={da ? 'Øvequiz' : 'Practice Quiz'} desc={da ? '10 tilfældige spørgsmål' : '10 random questions'} onPress={() => startQuiz('practice')} />
           <ModeBtn color="#0033A0" icon="🏆" title={da ? 'Fuld Prøveeksamen' : 'Full Mock Test'} desc={da ? '45 spørgsmål · ikke tidsbegrænset · med forklaringer' : '45 questions · untimed · with explanations'} onPress={() => startQuiz('mock')} />
           <ModeBtn color="#5B2D8E" icon="⏱️" title={da ? 'Eksamenssimulator' : 'Exam Simulator'} desc={da ? '45 min · tidsbegrænset · ingen forklaringer' : '45 min timed · no explanations'} onPress={() => startQuiz('exam')} />
@@ -846,6 +849,7 @@ const styles = StyleSheet.create({
   streakTxt: { fontWeight: '600', fontSize: 13 },
   section: { paddingHorizontal: 18, paddingTop: 20 },
   sectionLbl: { fontSize: 11, fontWeight: '600', letterSpacing: 2, textTransform: 'uppercase', marginBottom: 12 },
+  modeFilterNote: { fontSize: 11, lineHeight: 15, marginTop: -6, marginBottom: 12 },
   masteryGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 4 },
   masteryCard: { width: (SW - 44) / 2, borderRadius: 12, padding: 12, shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.08, shadowRadius: 8, elevation: 3 },
   masteryName: { fontSize: 12, fontWeight: '600' },
