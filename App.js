@@ -367,7 +367,7 @@ function QuizScreen({ T, da, lang, state, setState, goHome, onFinish }) {
     const total = qs.length;
     const passed = (mode === 'mock' || mode === 'exam')
       ? (sc >= Math.ceil(total * 0.8) && vs >= 4)
-      : (sc >= Math.ceil(total * 0.7));
+      : (sc >= Math.ceil(total * 0.8));
     // Lean per-question record (id, not the full question) so history stays
     // small and always reflects the current question content on lookup.
     const answerIds = ans.map(a => ({ id: a.q.id, chosen: a.chosen, ok: a.ok }));
