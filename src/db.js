@@ -188,10 +188,17 @@ async function initialHydrate(db) {
 }
 
 // ── QUESTIONS ─────────────────────────────────────────────────────────────────
-// Same cache-then-revalidate approach as the web app: show what's cached
-// instantly, refetch in the background, replace on success. The bundled
-// FALLBACK_Q only seeds a true cold start (no cache yet) that also has no
-// network — after that, Supabase is the only source of truth.
+// SQLite is a cache for offline reads, never the source of truth. Every read
+// (getLocalQuestions) is instant and works offline; syncQuestions() is the
+// only thing allowed to write the questions table, and it always pulls the
+// full current set from Supabase. The bundled FALLBACK_Q only seeds a true
+// cold start (no cache yet) that also has no network.
+//
+// Because the app can stay resident for a long time without a real relaunch,
+// a single sync at boot isn't enough to call this "synced with the source of
+// truth" — armQuestionSync() below re-checks periodically and whenever the
+// app comes back to the foreground, and onQuestionsUpdated() lets already-
+// mounted screens pick up a change without the user having to restart the app.
 function mapRemoteQuestion(r) {
   return {
     id: Number(r.id), cat: r.category, type: r.type,
@@ -216,6 +223,23 @@ export async function getLocalQuestions() {
   return rows.map(r => ({ id: r.id, cat: r.cat, type: r.type, en: JSON.parse(r.en), da: JSON.parse(r.da) }));
 }
 
+// Non-cryptographic — only used to cheaply detect "did the question bank
+// actually change" so we don't rewrite SQLite and re-render the quiz on
+// every periodic check when nothing changed on the server.
+function cheapHash(str) {
+  let h = 0;
+  for (let i = 0; i < str.length; i++) h = (Math.imul(31, h) + str.charCodeAt(i)) | 0;
+  return h.toString(36);
+}
+
+const _questionListeners = new Set();
+// Lets already-mounted screens react when the background sync below pulls a
+// change, instead of only taking effect the next time the app is relaunched.
+export function onQuestionsUpdated(callback) {
+  _questionListeners.add(callback);
+  return () => _questionListeners.delete(callback);
+}
+
 export async function syncQuestions() {
   const db = await getDb();
   try {
@@ -224,7 +248,15 @@ export async function syncQuestions() {
       15000
     );
     if (error || !data || data.length === 0) return false;
-    await replaceLocalQuestions(db, data.map(mapRemoteQuestion));
+
+    const mapped = data.map(mapRemoteQuestion);
+    const hash = cheapHash(JSON.stringify(mapped));
+    const prevHash = await getMeta(db, 'questions_hash');
+    if (hash !== prevHash) {
+      await replaceLocalQuestions(db, mapped);
+      await setMeta(db, 'questions_hash', hash);
+      _questionListeners.forEach(cb => { try { cb(mapped); } catch (e) { console.warn('onQuestionsUpdated listener failed:', e); } });
+    }
     return true;
   } catch (e) {
     // Timeout, or offline — caller falls back to whatever's already cached.
@@ -244,6 +276,30 @@ async function ensureQuestionsLoaded(db) {
     const stillEmpty = ((await db.getFirstAsync('SELECT COUNT(*) as n FROM questions'))?.n || 0) === 0;
     if (stillEmpty) await replaceLocalQuestions(db, FALLBACK_Q); // offline on very first launch
   }
+}
+
+// Re-checking the whole question bank on every foreground/interval tick would
+// waste data and battery for content that changes at most a few times a
+// month, so throttle to once per interval regardless of what triggers the check.
+const QUESTION_SYNC_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
+let _lastQuestionCheck = 0;
+function maybeSyncQuestions() {
+  const now = Date.now();
+  if (now - _lastQuestionCheck < QUESTION_SYNC_INTERVAL_MS) return;
+  _lastQuestionCheck = now;
+  syncQuestions();
+}
+
+let _questionSyncArmed = false;
+function armQuestionSync() {
+  if (_questionSyncArmed) return;
+  _questionSyncArmed = true;
+  _lastQuestionCheck = Date.now(); // ensureQuestionsLoaded() just synced at boot; don't immediately re-fire
+
+  AppState.addEventListener('change', (state) => {
+    if (state === 'active') maybeSyncQuestions();
+  });
+  setInterval(() => maybeSyncQuestions(), QUESTION_SYNC_INTERVAL_MS);
 }
 
 // ── IDENTITY SWITCH ───────────────────────────────────────────────────────────
@@ -287,6 +343,7 @@ export function initDb() {
       await initialHydrate(db);
       await ensureQuestionsLoaded(db);
       armBackgroundFlush();
+      armQuestionSync();
       armIdentityWatcher();
       flushSyncQueue(); // opportunistic, don't block startup on it
       return db;

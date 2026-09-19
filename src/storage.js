@@ -4,7 +4,7 @@ import {
   getLocalProgress, writeLocalProgress,
   getLocalHistory, addLocalHistory, clearLocalHistory,
   getLocalStreak, setLocalStreak,
-  getLocalQuestions, syncQuestions,
+  getLocalQuestions, syncQuestions, onQuestionsUpdated,
 } from './db';
 
 export {
@@ -13,6 +13,9 @@ export {
 
 export const getQuestions = () => getLocalQuestions();
 export const refreshQuestions = () => syncQuestions();
+// Lets a mounted screen pick up a question-bank change pulled in by the
+// periodic background sync, without requiring the user to restart the app.
+export { onQuestionsUpdated };
 
 // ── LOCAL KEYS (prefs only — stay on device) ──────────────────────────────────
 const KEYS = {

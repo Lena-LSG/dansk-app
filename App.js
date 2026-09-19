@@ -9,7 +9,7 @@ import * as Haptics from 'expo-haptics';
 import { COLORS, CAT_EN, CAT_DA, TYPE_LABELS, shuffle } from './src/questions';
 import {
   markAnswer, getWrongIds, addHistory, getHistory, clearHistory,
-  checkStreak, getMastery, getPrefs, savePrefs, getQuestions,
+  checkStreak, getMastery, getPrefs, savePrefs, getQuestions, onQuestionsUpdated,
   getAuthState, onAuthChange, signUpEmail, signInEmail, signOutUser,
 } from './src/storage';
 
@@ -66,6 +66,11 @@ export default function App() {
       setQuestionsReady(true);
     })();
   }, []);
+
+  // db.js periodically re-checks Supabase for question-bank updates in the
+  // background (see armQuestionSync); this picks up a change live instead of
+  // requiring the user to restart the app to see new/fixed questions.
+  useEffect(() => onQuestionsUpdated(setQ), []);
 
   const toggleDark = async () => {
     const nd = !darkMode; setDarkMode(nd);
